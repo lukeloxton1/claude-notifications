@@ -1,11 +1,12 @@
 {
+  "_comment": "Copy this hooks section to your ~/.claude/settings.json, replacing PLUGIN_PATH with the actual path",
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$PLUGIN_DIR/hooks/notify.js\""
+            "command": "node \"PLUGIN_PATH/hooks/notify.js\""
           }
         ]
       }
