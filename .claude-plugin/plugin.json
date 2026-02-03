@@ -1,0 +1,9 @@
+{
+  "name": "claude-notify",
+  "version": "1.0.0",
+  "description": "Cross-platform desktop notifications for Claude Code with click-to-focus support",
+  "author": "Luke Loxton & Ambrose",
+  "repository": "https://github.com/lukeloxton/claude-notify",
+  "platforms": ["win32", "darwin"],
+  "keywords": ["notifications", "desktop", "focus", "productivity"]
+}

@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_DIR/hooks/notify.js\""
+          }
+        ]
+      }
+    ]
+  }
+}

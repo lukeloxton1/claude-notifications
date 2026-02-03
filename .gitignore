@@ -1,0 +1,11 @@
+# Runtime data files
+notify-data.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
