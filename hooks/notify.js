@@ -114,15 +114,15 @@ foreach ($p in $procs) {
 
 # Walk up from this process to find shell PID
 $shellPid = $null
-$pid = ${process.pid}
-while ($pid -and $procMap.ContainsKey($pid)) {
-    $proc = $procMap[$pid]
+$currentPid = ${process.pid}
+while ($currentPid -and $procMap.ContainsKey($currentPid)) {
+    $proc = $procMap[$currentPid]
     $name = $proc.Name
     if ($name -eq 'pwsh.exe' -or $name -eq 'powershell.exe' -or $name -eq 'cmd.exe') {
         $shellPid = $proc.ProcessId
         break
     }
-    $pid = $proc.ParentProcessId
+    $currentPid = $proc.ParentProcessId
 }
 
 if (-not $shellPid) { exit 1 }
@@ -130,14 +130,14 @@ if (-not $shellPid) { exit 1 }
 # Now find which WindowsTerminal.exe is the ancestor of our shell
 # Walk up from shell to find WindowsTerminal
 $wtPid = $null
-$pid = $shellPid
-while ($pid -and $procMap.ContainsKey($pid)) {
-    $proc = $procMap[$pid]
+$currentPid = $shellPid
+while ($currentPid -and $procMap.ContainsKey($currentPid)) {
+    $proc = $procMap[$currentPid]
     if ($proc.Name -eq 'WindowsTerminal.exe') {
         $wtPid = $proc.ProcessId
         break
     }
-    $pid = $proc.ParentProcessId
+    $currentPid = $proc.ParentProcessId
 }
 
 if (-not $wtPid) { exit 1 }
