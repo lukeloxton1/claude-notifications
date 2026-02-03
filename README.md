@@ -4,6 +4,30 @@ Cross-platform desktop notifications for Claude Code with click-to-focus support
 
 When Claude finishes responding, you get a desktop notification. Click it to jump back to the correct terminal window/tab.
 
+## Quick Start
+
+**Windows:**
+```powershell
+git clone https://github.com/lukeloxton1/claude-notify.git $HOME\claude-notify
+cd $HOME\claude-notify
+.\scripts\windows\install.ps1
+```
+
+**macOS:**
+```bash
+git clone https://github.com/lukeloxton1/claude-notify.git ~/claude-notify
+cd ~/claude-notify
+./scripts/macos/install.sh
+```
+
+Then add the hook to `~/.claude/settings.json` (the installer will show the exact command).
+
+## Prerequisites
+
+- **Node.js** (v16 or later) - Required for the hook script
+- **Windows:** PowerShell 5.1+ (included with Windows 10/11)
+- **macOS:** Homebrew (for installing terminal-notifier)
+
 ## Features
 
 - Desktop notifications when Claude completes a response
@@ -49,6 +73,7 @@ This installs:
 
 Add the hook to your Claude Code settings (`~/.claude/settings.json`):
 
+**Windows** (assuming you cloned to your home directory):
 ```json
 {
   "hooks": {
@@ -57,7 +82,7 @@ Add the hook to your Claude Code settings (`~/.claude/settings.json`):
         "hooks": [
           {
             "type": "command",
-            "command": "node \"/path/to/claude-notify/hooks/notify.js\""
+            "command": "node C:/Users/YOUR_USERNAME/claude-notify/hooks/notify.js"
           }
         ]
       }
@@ -66,7 +91,25 @@ Add the hook to your Claude Code settings (`~/.claude/settings.json`):
 }
 ```
 
-Replace `/path/to/claude-notify` with the actual path where you installed the plugin.
+**macOS/Linux:**
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/claude-notify/hooks/notify.js"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Replace `YOUR_USERNAME` or adjust the path to match where you cloned the repository.
 
 ## Custom Notification Messages
 
@@ -127,6 +170,32 @@ The plugin dynamically finds the correct WT window by walking the process tree f
 ### macOS: Click doesn't focus correct tab
 
 Tab-level focus only works in iTerm2. Other terminals get app-level activation.
+
+## Testing
+
+To verify the plugin is working:
+
+1. **Check the hook runs:** After Claude responds, check that `notify-data.json` in the plugin directory was updated recently
+
+2. **Check window detection (Windows):** The `wtWindowHandle` field in `notify-data.json` should be a number, not `null`
+   ```powershell
+   Get-Content $HOME\claude-notify\notify-data.json
+   ```
+
+3. **Test notification manually:**
+
+   **Windows:**
+   ```powershell
+   Import-Module BurntToast
+   New-BurntToastNotification -Text "Test", "It works!"
+   ```
+
+   **macOS:**
+   ```bash
+   terminal-notifier -title "Test" -message "It works!"
+   ```
+
+4. **Test with multiple terminals:** Open 2+ terminal windows, run Claude in one, and verify the notification flashes/focuses the correct window
 
 ## Uninstall
 
