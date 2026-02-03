@@ -1,11 +1,11 @@
-# Flash the correct Windows Terminal taskbar icon based on shell PID
-# Reads shellPid from notify-data.json and traces process tree to find owning WT window
+# Flash the Windows Terminal window using stored handle from notify-data.json
+# The handle was captured at notification time when the correct window was active
 
 Add-Type @"
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Collections.Generic;
 
 public class TaskbarFlash {
     [DllImport("user32.dll")]
@@ -13,9 +13,9 @@ public class TaskbarFlash {
     [DllImport("user32.dll")]
     public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
     [DllImport("user32.dll")]
-    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-    [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
@@ -33,24 +33,6 @@ public class TaskbarFlash {
     public const uint FLASHW_ALL = 3;
     public const uint FLASHW_TIMERNOFG = 12;
 
-    // Get all Windows Terminal windows with their process IDs
-    public static List<Tuple<IntPtr, uint>> GetAllWindowsTerminalWindows() {
-        var windows = new List<Tuple<IntPtr, uint>>();
-        EnumWindows((hWnd, lParam) => {
-            if (IsWindowVisible(hWnd)) {
-                var sb = new StringBuilder(256);
-                GetClassName(hWnd, sb, 256);
-                if (sb.ToString() == "CASCADIA_HOSTING_WINDOW_CLASS") {
-                    uint pid;
-                    GetWindowThreadProcessId(hWnd, out pid);
-                    windows.Add(Tuple.Create(hWnd, pid));
-                }
-            }
-            return true;
-        }, IntPtr.Zero);
-        return windows;
-    }
-
     public static void FlashWindow(IntPtr hwnd) {
         FLASHWINFO fwi = new FLASHWINFO();
         fwi.cbSize = (uint)Marshal.SizeOf(typeof(FLASHWINFO));
@@ -60,59 +42,54 @@ public class TaskbarFlash {
         fwi.dwTimeout = 0;
         FlashWindowEx(ref fwi);
     }
+
+    public static IntPtr FindFirstWTWindow() {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((hWnd, lParam) => {
+            if (IsWindowVisible(hWnd)) {
+                var sb = new StringBuilder(256);
+                GetClassName(hWnd, sb, 256);
+                if (sb.ToString() == "CASCADIA_HOSTING_WINDOW_CLASS") {
+                    found = hWnd;
+                    return false; // stop enumeration
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
 }
 "@
 
 # Find plugin directory (two levels up from this script)
 $pluginDir = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $dataFile = Join-Path $pluginDir "notify-data.json"
-$shellPid = $null
+
+$hwnd = [IntPtr]::Zero
 
 if (Test-Path $dataFile) {
     try {
         $data = Get-Content $dataFile -Raw | ConvertFrom-Json
-        $shellPid = $data.shellPid
+        if ($data.wtWindowHandle) {
+            $hwnd = [IntPtr]::new([long]$data.wtWindowHandle)
+        }
     } catch {}
 }
 
-# Get all Windows Terminal windows
-$wtWindows = [TaskbarFlash]::GetAllWindowsTerminalWindows()
-
-if ($wtWindows.Count -eq 0) {
-    exit 0
-}
-
-if ($wtWindows.Count -eq 1) {
-    [TaskbarFlash]::FlashWindow($wtWindows[0].Item1)
-    exit 0
-}
-
-# Multiple WT windows - find the one that owns our shell process
-if ($shellPid) {
-    $procs = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
-    $parentMap = @{}
-    foreach ($p in $procs) {
-        $parentMap[$p.ProcessId] = $p.ParentProcessId
-    }
-
-    $wtPids = @{}
-    foreach ($wt in $wtWindows) {
-        $wtPids[$wt.Item2] = $wt.Item1
-    }
-
-    $currentPid = $shellPid
-    $maxDepth = 20
-    $depth = 0
-
-    while ($currentPid -and $depth -lt $maxDepth) {
-        if ($wtPids.ContainsKey($currentPid)) {
-            [TaskbarFlash]::FlashWindow($wtPids[$currentPid])
+# Validate the stored handle is still a valid WT window
+if ($hwnd -ne [IntPtr]::Zero) {
+    if ([TaskbarFlash]::IsWindow($hwnd)) {
+        $sb = New-Object System.Text.StringBuilder 256
+        [void][TaskbarFlash]::GetClassName($hwnd, $sb, 256)
+        if ($sb.ToString() -eq "CASCADIA_HOSTING_WINDOW_CLASS") {
+            [TaskbarFlash]::FlashWindow($hwnd)
             exit 0
         }
-        $currentPid = $parentMap[$currentPid]
-        $depth++
     }
 }
 
-# Fallback: flash the first WT window
-[TaskbarFlash]::FlashWindow($wtWindows[0].Item1)
+# Fallback: flash the first WT window we find
+$fallback = [TaskbarFlash]::FindFirstWTWindow()
+if ($fallback -ne [IntPtr]::Zero) {
+    [TaskbarFlash]::FlashWindow($fallback)
+}

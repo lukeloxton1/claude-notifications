@@ -88,12 +88,12 @@ The notification will show "Fixed the login bug" instead of "Response complete".
 ### Windows
 
 1. The Stop hook triggers `notify.js` after each Claude response
-2. `notify.js` extracts the notification message and finds the shell PID
-3. BurntToast shows a notification with a "Show me" button
-4. Clicking the button triggers `claude-focus://focus`
-5. The protocol handler runs `focus-window.ps1`
-6. The script traces the process tree from shell PID to find the owning Windows Terminal window
-7. That specific WT window's taskbar icon flashes
+2. `notify.js` extracts the notification message from `<!-- notify: ... -->` tag
+3. `notify.js` walks the process tree: `node.exe` -> `claude.exe` -> `pwsh.exe` -> `WindowsTerminal.exe`
+4. Finds the HWND of that specific WT window and stores it in `notify-data.json`
+5. BurntToast shows a notification with a "Show me" button
+6. Clicking the button triggers `claude-focus://focus` protocol handler
+7. `focus-window.ps1` reads the stored HWND and flashes that specific WT window
 
 ### macOS
 
@@ -113,7 +113,10 @@ Run: `Install-Module -Name BurntToast -Scope CurrentUser -Force`
 
 ### Windows: Wrong terminal window flashes
 
-Check that `notify-data.json` in the plugin directory contains the correct `shellPid`. The process tree walk may fail if the shell process has exited.
+The plugin dynamically finds the correct WT window by walking the process tree from the notification hook to find which `WindowsTerminal.exe` is the ancestor. If this fails:
+1. Check `notify-data.json` - if `wtWindowHandle` is null, the process tree walk failed
+2. This can happen if running from a non-standard terminal (not Windows Terminal)
+3. The fallback will flash the first WT window found
 
 ### macOS: No notification appears
 

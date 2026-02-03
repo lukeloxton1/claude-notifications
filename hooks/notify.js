@@ -5,7 +5,7 @@
  * Supports Windows (BurntToast) and macOS (terminal-notifier).
  */
 
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -28,16 +28,12 @@ process.stdin.on('end', () => {
     // Extract notification message
     let message = 'Response complete';
 
-    // Use provided message if available
     if (json.message) {
       message = json.message;
-    }
-    // Extract <!-- notify: ... --> from transcript
-    else if (json.transcript_path && fs.existsSync(json.transcript_path)) {
+    } else if (json.transcript_path && fs.existsSync(json.transcript_path)) {
       const transcript = fs.readFileSync(json.transcript_path, 'utf8');
       const lines = transcript.trim().split('\n');
 
-      // Find last assistant message and extract notify tag
       for (let i = lines.length - 1; i >= 0; i--) {
         try {
           const entry = JSON.parse(lines[i]);
@@ -56,24 +52,20 @@ process.stdin.on('end', () => {
       }
     }
 
-    // Truncate long messages
     if (message.length > 60) {
       message = message.substring(0, 57) + '...';
     }
 
-    // Find shell PID (for window focus on Windows)
-    let shellPid = null;
-    if (os.platform() === 'win32') {
-      shellPid = findShellPid();
-    }
-
-    // Get working directory for context
     const cwd = json.cwd || process.cwd();
 
-    // Write data for platform scripts
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ message, shellPid, cwd }));
+    // On Windows: look up HWND from sessions file using shell PID
+    let wtWindowHandle = null;
+    if (os.platform() === 'win32') {
+      wtWindowHandle = lookupWindowHandle();
+    }
 
-    // Dispatch to platform-specific notification
+    fs.writeFileSync(DATA_FILE, JSON.stringify({ message, wtWindowHandle, cwd }));
+
     if (os.platform() === 'win32') {
       notifyWindows();
     } else if (os.platform() === 'darwin') {
@@ -81,7 +73,6 @@ process.stdin.on('end', () => {
     }
 
   } catch (e) {
-    // Fallback: try basic notification
     if (os.platform() === 'win32') {
       try {
         execSync('pwsh -Command "New-BurntToastNotification -Text \\"Claude Code\\", \\"Response complete\\""', {
@@ -94,49 +85,123 @@ process.stdin.on('end', () => {
 });
 
 /**
- * Find the shell process (pwsh/cmd) that's the ancestor of claude.exe
+ * Find the Windows Terminal window that hosts our shell process.
+ * Works by finding the conhost that belongs to our shell, then finding
+ * which WT process owns that conhost.
  */
-function findShellPid() {
+function lookupWindowHandle() {
   try {
-    const result = execSync('powershell -NoProfile -Command "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json"', {
+    // PowerShell script that:
+    // 1. Walks up from current PID to find the shell (pwsh/powershell/cmd)
+    // 2. Finds all Windows Terminal windows
+    // 3. Returns the HWND of the WT window whose process tree contains our shell
+    const psScript = `
+$ErrorActionPreference = 'SilentlyContinue'
+
+# Get process tree info
+$procs = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
+
+# Build lookup maps
+$procMap = @{}
+$childMap = @{}
+foreach ($p in $procs) {
+    $procMap[$p.ProcessId] = $p
+    if (-not $childMap.ContainsKey($p.ParentProcessId)) {
+        $childMap[$p.ParentProcessId] = @()
+    }
+    $childMap[$p.ParentProcessId] += $p.ProcessId
+}
+
+# Walk up from this process to find shell PID
+$shellPid = $null
+$pid = ${process.pid}
+while ($pid -and $procMap.ContainsKey($pid)) {
+    $proc = $procMap[$pid]
+    $name = $proc.Name
+    if ($name -eq 'pwsh.exe' -or $name -eq 'powershell.exe' -or $name -eq 'cmd.exe') {
+        $shellPid = $proc.ProcessId
+        break
+    }
+    $pid = $proc.ParentProcessId
+}
+
+if (-not $shellPid) { exit 1 }
+
+# Now find which WindowsTerminal.exe is the ancestor of our shell
+# Walk up from shell to find WindowsTerminal
+$wtPid = $null
+$pid = $shellPid
+while ($pid -and $procMap.ContainsKey($pid)) {
+    $proc = $procMap[$pid]
+    if ($proc.Name -eq 'WindowsTerminal.exe') {
+        $wtPid = $proc.ProcessId
+        break
+    }
+    $pid = $proc.ParentProcessId
+}
+
+if (-not $wtPid) { exit 1 }
+
+# Find the window handle for this WT process
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Collections.Generic;
+public class WTFinder {
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int nMaxCount);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    public static List<long[]> WTWindows = new List<long[]>();
+    public static void FindWTWindows() {
+        EnumWindows((hWnd, lParam) => {
+            if (IsWindowVisible(hWnd)) {
+                var sb = new StringBuilder(256);
+                GetClassName(hWnd, sb, 256);
+                if (sb.ToString() == "CASCADIA_HOSTING_WINDOW_CLASS") {
+                    uint pid;
+                    GetWindowThreadProcessId(hWnd, out pid);
+                    WTWindows.Add(new long[] { hWnd.ToInt64(), pid });
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+    }
+}
+"@
+[WTFinder]::FindWTWindows()
+
+# Find the window that belongs to our WT process
+foreach ($wt in [WTFinder]::WTWindows) {
+    if ($wt[1] -eq $wtPid) {
+        Write-Output $wt[0]
+        exit 0
+    }
+}
+exit 1
+`;
+
+    const result = execSync(`powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`, {
       encoding: 'utf8',
       windowsHide: true,
-      timeout: 5000
-    });
+      timeout: 8000
+    }).trim();
 
-    const procs = JSON.parse(result);
-    const procMap = {};
-    for (const p of procs) procMap[p.ProcessId] = p;
-
-    // Walk up process tree from current process
-    let pid = process.pid;
-    let foundClaude = false;
-
-    while (pid && procMap[pid]) {
-      const proc = procMap[pid];
-
-      if (foundClaude && (proc.Name === 'pwsh.exe' || proc.Name === 'powershell.exe' || proc.Name === 'cmd.exe')) {
-        return proc.ProcessId;
-      }
-      if (proc.Name === 'claude.exe') {
-        foundClaude = true;
-      }
-      pid = proc.ParentProcessId;
+    if (result && !isNaN(parseInt(result))) {
+      return parseInt(result);
     }
   } catch (e) {
-    // Silently fail - focus will use fallback
+    // Silent fail - will fallback to first WT window
   }
   return null;
 }
 
-/**
- * Show notification on Windows using BurntToast
- */
 function notifyWindows() {
   const script = path.join(PLUGIN_DIR, 'scripts', 'windows', 'notify-toast.ps1');
   if (fs.existsSync(script)) {
     try {
-      // Find PowerShell 7 or fall back to Windows PowerShell
       const pwsh = fs.existsSync('C:\\Program Files\\PowerShell\\7\\pwsh.exe')
         ? '"C:\\Program Files\\PowerShell\\7\\pwsh.exe"'
         : 'powershell';
@@ -150,9 +215,6 @@ function notifyWindows() {
   }
 }
 
-/**
- * Show notification on macOS using terminal-notifier
- */
 function notifyMacOS(message) {
   const script = path.join(PLUGIN_DIR, 'scripts', 'macos', 'notify.sh');
   if (fs.existsSync(script)) {
