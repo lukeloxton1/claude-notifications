@@ -15,13 +15,15 @@ try {
     # Create button with HWND embedded in protocol URL (avoids race condition with shared file)
     $focusUrl = if ($hwnd) { "claude-focus://focus/$hwnd" } else { "claude-focus://focus" }
     $button = New-BTButton -Content "Show me" -Arguments $focusUrl
-    New-BurntToastNotification -Text $Title, $Message -Button $button -UniqueIdentifier "claude-code-$hwnd"
+    $expiration = (Get-Date).AddMinutes(10)
+    New-BurntToastNotification -Text $Title, $Message -Button $button -UniqueIdentifier "claude-code-$hwnd" -ExpirationTime $expiration
 }
 catch {
     # Fallback notification without button
     try {
         Import-Module BurntToast -ErrorAction Stop
-        New-BurntToastNotification -Text "Claude Code", "Response complete" -UniqueIdentifier "claude-code"
+        $expiration = (Get-Date).AddMinutes(10)
+        New-BurntToastNotification -Text "Claude Code", "Response complete" -UniqueIdentifier "claude-code" -ExpirationTime $expiration
     }
     catch {}
 }
