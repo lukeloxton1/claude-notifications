@@ -11,7 +11,6 @@ const path = require('path');
 const os = require('os');
 
 const PLUGIN_DIR = path.dirname(__dirname);
-const DATA_FILE = path.join(PLUGIN_DIR, 'notify-data.json');
 
 // Read stdin (hook event data)
 let data = '';
@@ -79,6 +78,7 @@ process.stdin.on('end', () => {
     }
 
     const cwd = json.cwd || process.cwd();
+    const sessionId = json.session_id || 'default';
 
     // On Windows: look up HWND from sessions file
     let wtWindowHandle = null;
@@ -86,10 +86,12 @@ process.stdin.on('end', () => {
       wtWindowHandle = lookupWindowHandle(cwd);
     }
 
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ message, wtWindowHandle, cwd }));
+    // Use session-specific data file to avoid race conditions between multiple sessions
+    const dataFile = path.join(PLUGIN_DIR, `notify-data-${sessionId}.json`);
+    fs.writeFileSync(dataFile, JSON.stringify({ message, wtWindowHandle, cwd, sessionId }));
 
     if (os.platform() === 'win32') {
-      notifyWindows();
+      notifyWindows(sessionId);
     } else if (os.platform() === 'darwin') {
       notifyMacOS(message);
     }
@@ -193,7 +195,7 @@ function lookupWindowHandle(cwd) {
   return null;
 }
 
-function notifyWindows() {
+function notifyWindows(sessionId) {
   const script = path.join(PLUGIN_DIR, 'scripts', 'windows', 'notify-toast.ps1');
   if (fs.existsSync(script)) {
     try {
@@ -201,7 +203,7 @@ function notifyWindows() {
         ? '"C:\\Program Files\\PowerShell\\7\\pwsh.exe"'
         : 'powershell';
 
-      execSync(`${pwsh} -ExecutionPolicy Bypass -File "${script}"`, {
+      execSync(`${pwsh} -ExecutionPolicy Bypass -File "${script}" -SessionId "${sessionId}"`, {
         windowsHide: true,
         timeout: 5000,
         cwd: PLUGIN_DIR

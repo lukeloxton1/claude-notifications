@@ -1,12 +1,23 @@
 # Claude Code notification with click-to-focus
-# Reads message and HWND from notify-data.json, embeds HWND in protocol URL
+# Reads message and HWND from session-specific notify-data file, embeds HWND in protocol URL
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$SessionId
+)
 
 try {
     Import-Module BurntToast -ErrorAction Stop
 
-    # Read message from data file
+    # Read message from session-specific data file
     $pluginDir = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $dataFile = Join-Path $pluginDir "notify-data.json"
+    $dataFile = Join-Path $pluginDir "notify-data-$SessionId.json"
+
+    if (-not (Test-Path $dataFile)) {
+        # Fallback to default file if session-specific file doesn't exist
+        $dataFile = Join-Path $pluginDir "notify-data.json"
+    }
+
     $data = Get-Content $dataFile -Raw | ConvertFrom-Json
     $Message = $data.message
     $Title = "Claude Code"
