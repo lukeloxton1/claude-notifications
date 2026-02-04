@@ -64,7 +64,6 @@ public class TaskbarFlash {
 
 # Find plugin directory (two levels up from this script)
 $pluginDir = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$dataFile = Join-Path $pluginDir "notify-data.json"
 
 $hwnd = [IntPtr]::Zero
 
@@ -73,12 +72,17 @@ if ($Url -match 'claude-focus://focus/(\d+)') {
     $hwnd = [IntPtr]::new([long]$Matches[1])
 }
 
-# Strategy 2: Fall back to reading from data file
-if ($hwnd -eq [IntPtr]::Zero -and (Test-Path $dataFile)) {
+# Strategy 2: Fall back to most recent session-specific data file
+if ($hwnd -eq [IntPtr]::Zero) {
     try {
-        $data = Get-Content $dataFile -Raw | ConvertFrom-Json
-        if ($data.wtWindowHandle) {
-            $hwnd = [IntPtr]::new([long]$data.wtWindowHandle)
+        # Find the most recently modified notify-data-*.json file (most recent notification)
+        $dataFiles = Get-ChildItem -Path $pluginDir -Filter "notify-data-*.json" -File | Sort-Object LastWriteTime -Descending
+        if ($dataFiles.Count -gt 0) {
+            $dataFile = $dataFiles[0].FullName
+            $data = Get-Content $dataFile -Raw | ConvertFrom-Json
+            if ($data.wtWindowHandle) {
+                $hwnd = [IntPtr]::new([long]$data.wtWindowHandle)
+            }
         }
     } catch {}
 }
