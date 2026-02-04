@@ -17,8 +17,13 @@ const DATA_FILE = path.join(PLUGIN_DIR, 'notify-data.json');
 let data = '';
 process.stdin.on('data', chunk => data += chunk);
 process.stdin.on('end', () => {
+  const msgDebugFile = path.join(os.homedir(), 'claude-notify-msg-debug.log');
+  const msgDebug = (msg) => fs.appendFileSync(msgDebugFile, `${new Date().toISOString()} ${msg}\n`);
+
   try {
     const json = JSON.parse(data);
+    msgDebug(`Event received: type=${json.type}, keys=${Object.keys(json).join(',')}`);
+    msgDebug(`transcript_path=${json.transcript_path || 'NOT SET'}`);
 
     // Skip idle_prompt events
     if (json.type === 'idle_prompt') {
@@ -29,27 +34,44 @@ process.stdin.on('end', () => {
     let message = 'Response complete';
 
     if (json.message) {
+      msgDebug(`Using json.message directly: ${json.message}`);
       message = json.message;
     } else if (json.transcript_path && fs.existsSync(json.transcript_path)) {
+      msgDebug(`Reading transcript from: ${json.transcript_path}`);
       const transcript = fs.readFileSync(json.transcript_path, 'utf8');
       const lines = transcript.trim().split('\n');
+      msgDebug(`Transcript has ${lines.length} lines`);
 
-      for (let i = lines.length - 1; i >= 0; i--) {
+      // Search backwards through assistant entries for notify tag
+      // Don't break early - transcript has multiple entries per turn (thinking, text, tool_use)
+      let foundTag = false;
+      for (let i = lines.length - 1; i >= 0 && !foundTag; i--) {
         try {
           const entry = JSON.parse(lines[i]);
           if (entry.type === 'assistant' && entry.message?.content) {
-            const content = Array.isArray(entry.message.content)
-              ? entry.message.content.map(c => c.text || '').join('')
-              : entry.message.content;
+            const contentArr = Array.isArray(entry.message.content) ? entry.message.content : [entry.message.content];
 
-            const match = content.match(/<!--\s*notify:\s*(.+?)\s*-->/i);
-            if (match) {
-              message = match[1].trim();
+            for (const c of contentArr) {
+              const text = c.text || '';
+              if (text.length > 0) {
+                msgDebug(`Found text content, length=${text.length}`);
+                const match = text.match(/<!--\s*notify:\s*(.+?)\s*-->/i);
+                if (match) {
+                  msgDebug(`Found notify tag: ${match[1]}`);
+                  message = match[1].trim();
+                  foundTag = true;
+                  break;
+                }
+              }
             }
-            break;
           }
         } catch (e) { /* skip malformed line */ }
       }
+      if (!foundTag) {
+        msgDebug(`No notify tag found in any assistant message`);
+      }
+    } else {
+      msgDebug(`transcript_path not available or file doesn't exist`);
     }
 
     if (message.length > 60) {
@@ -127,73 +149,43 @@ function lookupWindowHandle(cwd) {
       }
     }
 
-    debug('Falling back to Strategy 2/3 (title match or first WT)');
-    // Strategy 2 & 3: Match by title or fallback to first WT window
-    const psScript = `
-param($DirName)
-$ErrorActionPreference = 'SilentlyContinue'
+    debug('Falling back to Strategy 3 (title match via script)');
+    // Strategy 3: Match by title or fallback to first WT window using external script
+    const findScript = path.join(PLUGIN_DIR, 'scripts', 'windows', 'find-wt-window.ps1');
+    if (fs.existsSync(findScript)) {
+      const escapedDir = dirName.replace(/'/g, "''");
+      const escapedPath = cwd ? cwd.replace(/'/g, "''") : '';
+      const result = execSync(`powershell -ExecutionPolicy Bypass -NoProfile -File "${findScript}" -DirName '${escapedDir}' -FullPath '${escapedPath}'`, {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 8000
+      }).trim();
 
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Collections.Generic;
-public class WTMatcher {
-    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int n);
-    [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int n);
-    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    public static List<object[]> WTWindows = new List<object[]>();
-    public static void FindWTWindows() {
-        EnumWindows((hWnd, lParam) => {
-            if (IsWindowVisible(hWnd)) {
-                var cls = new StringBuilder(256);
-                GetClassName(hWnd, cls, 256);
-                if (cls.ToString() == "CASCADIA_HOSTING_WINDOW_CLASS") {
-                    var title = new StringBuilder(512);
-                    GetWindowText(hWnd, title, 512);
-                    WTWindows.Add(new object[] { hWnd.ToInt64(), title.ToString() });
-                }
+      if (result && !isNaN(parseInt(result))) {
+        const hwnd = parseInt(result);
+        debug(`Strategy 3 returned: ${hwnd}`);
+
+        // Auto-register this HWND so we don't have to search next time
+        if (cwd) {
+          try {
+            let sessions = {};
+            if (fs.existsSync(sessionsFile)) {
+              sessions = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
             }
-            return true;
-        }, IntPtr.Zero);
-    }
-}
-"@
-
-[WTMatcher]::FindWTWindows()
-
-# Try to match by directory name in title
-if ($DirName) {
-    foreach ($wt in [WTMatcher]::WTWindows) {
-        if ($wt[1] -like "*$DirName*") {
-            Write-Output $wt[0]
-            exit 0
+            sessions[cwd] = hwnd;
+            fs.writeFileSync(sessionsFile, JSON.stringify(sessions, null, 2));
+            debug(`Auto-registered HWND ${hwnd} for ${cwd}`);
+          } catch (e) {
+            debug(`Failed to auto-register: ${e.message}`);
+          }
         }
+
+        return hwnd;
+      }
+      debug('Strategy 3 returned nothing');
+    } else {
+      debug(`Script not found: ${findScript}`);
     }
-}
-
-# Fallback: return first WT window
-if ([WTMatcher]::WTWindows.Count -gt 0) {
-    Write-Output ([WTMatcher]::WTWindows[0][0])
-    exit 0
-}
-exit 1
-`;
-
-    const escapedDir = dirName.replace(/'/g, "''");
-    const result = execSync(`powershell -NoProfile -Command "& { ${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')} } -DirName '${escapedDir}'"`, {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 8000
-    }).trim();
-
-    if (result && !isNaN(parseInt(result))) {
-      debug(`Strategy 2/3 returned: ${result}`);
-      return parseInt(result);
-    }
-    debug('Strategy 2/3 returned nothing');
   } catch (e) {
     debug(`lookupWindowHandle error: ${e.message}`);
   }

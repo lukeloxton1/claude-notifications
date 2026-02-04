@@ -53,10 +53,22 @@ Then add the hook to `~/.claude/settings.json` (the installer will show the exac
    ```powershell
    .\scripts\windows\install.ps1
    ```
+3. **Add to your PowerShell profile** (`$PROFILE`):
+   ```powershell
+   . "$HOME\claude-notify\scripts\windows\Register-Session.ps1"
+   ```
+4. **Use `Start-Claude` to launch Claude** (instead of `claude` directly):
+   ```powershell
+   Start-Claude           # launches claude with session registration
+   c                      # shortcut alias
+   Start-Claude --help    # passes arguments through
+   ```
 
 This installs:
 - BurntToast PowerShell module (for notifications)
 - `claude-focus://` protocol handler (for click-to-focus)
+
+**Important:** The `Start-Claude` function registers your current directory and window handle before launching Claude. This is required for notifications to flash the correct window when you have multiple terminal sessions.
 
 ### macOS
 
@@ -130,13 +142,17 @@ The notification will show "Fixed the login bug" instead of "Response complete".
 
 ### Windows
 
-1. The Stop hook triggers `notify.js` after each Claude response
-2. `notify.js` extracts the notification message from `<!-- notify: ... -->` tag
-3. `notify.js` walks the process tree: `node.exe` -> `claude.exe` -> `pwsh.exe` -> `WindowsTerminal.exe`
-4. Finds the HWND of that specific WT window and stores it in `notify-data.json`
-5. BurntToast shows a notification with a "Show me" button
-6. Clicking the button triggers `claude-focus://focus` protocol handler
-7. `focus-window.ps1` reads the stored HWND and flashes that specific WT window
+1. When you run `Start-Claude`, `Register-Session.ps1` captures:
+   - The foreground window handle (HWND) of your Windows Terminal
+   - The current working directory
+   - Stores both in `~/.claude-wt-sessions.json`
+2. The Stop hook triggers `notify.js` after each Claude response
+3. `notify.js` extracts the notification message from `<!-- notify: ... -->` tag
+4. `notify.js` looks up the correct window handle from the sessions file using the cwd
+5. Stores the HWND in `notify-data.json`
+6. BurntToast shows a notification with a "Show me" button
+7. Clicking the button triggers `claude-focus://focus` protocol handler
+8. `focus-window.ps1` reads the stored HWND and flashes that specific WT window
 
 ### macOS
 
@@ -156,10 +172,29 @@ Run: `Install-Module -Name BurntToast -Scope CurrentUser -Force`
 
 ### Windows: Wrong terminal window flashes
 
-The plugin dynamically finds the correct WT window by walking the process tree from the notification hook to find which `WindowsTerminal.exe` is the ancestor. If this fails:
-1. Check `notify-data.json` - if `wtWindowHandle` is null, the process tree walk failed
-2. This can happen if running from a non-standard terminal (not Windows Terminal)
-3. The fallback will flash the first WT window found
+This happens when the session wasn't registered properly. Check:
+
+1. **Did you use `Start-Claude`?** If you ran `claude` directly, the session wasn't registered.
+   - Fix: Use `Start-Claude` or the `c` alias instead of `claude`
+
+2. **Is `Register-Session.ps1` in your profile?** Check your `$PROFILE`:
+   ```powershell
+   Get-Content $PROFILE | Select-String "Register-Session"
+   ```
+   If not found, add: `. "$HOME\claude-notify\scripts\windows\Register-Session.ps1"`
+
+3. **Check `notify-data.json`:** If `wtWindowHandle` is null, the lookup failed:
+   ```powershell
+   Get-Content $HOME\claude-notify\notify-data.json
+   ```
+
+4. **Check sessions file:** Verify your cwd is registered:
+   ```powershell
+   Get-Content $HOME\.claude-wt-sessions.json
+   ```
+   Your current directory should appear as a key with an HWND value.
+
+5. **Debug log:** Check `$HOME\claude-notify-debug.log` for detailed lookup info.
 
 ### macOS: No notification appears
 

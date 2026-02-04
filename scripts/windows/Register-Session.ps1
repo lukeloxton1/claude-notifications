@@ -1,7 +1,10 @@
 # Register-Session.ps1
-# Captures the current foreground window (Windows Terminal) and stores it in an environment variable.
-# This variable is inherited by all child processes (including Claude), so it works regardless of cwd.
-# Add to your PowerShell profile: . "$HOME\claude-notify\scripts\windows\Register-Session.ps1"
+# Captures the current foreground window (Windows Terminal) and registers it for claude-notify.
+# This enables notifications to flash the correct terminal window.
+#
+# Usage: Source this in your profile, then use Start-Claude to launch claude:
+#   . "$HOME\claude-notify\scripts\windows\Register-Session.ps1"
+#   Start-Claude  # or just 'claude' if you set up the alias
 
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -13,35 +16,81 @@ public class FGWindow {
 }
 "@
 
-$hwnd = [FGWindow]::GetForegroundWindow().ToInt64()
+function Register-ClaudeSession {
+    <#
+    .SYNOPSIS
+    Registers the current terminal window for claude-notify.
+    Called automatically by Start-Claude, but can be called manually if needed.
+    #>
+    $hwnd = [FGWindow]::GetForegroundWindow().ToInt64()
+    $cwd = $PWD.Path
 
-# Set environment variable for this session (inherited by child processes)
-$env:CLAUDE_WT_HWND = $hwnd
+    # Set environment variable (inherited by child processes)
+    $env:CLAUDE_WT_HWND = $hwnd
 
-# Also save to sessions file as backup (keyed by shell PID)
-$sessionsFile = Join-Path $HOME ".claude-wt-sessions.json"
-$sessions = @{}
+    # Save to sessions file keyed by cwd (primary lookup method)
+    $sessionsFile = Join-Path $HOME ".claude-wt-sessions.json"
+    $sessions = @{}
 
-if (Test-Path $sessionsFile) {
-    try {
-        $sessions = Get-Content $sessionsFile -Raw | ConvertFrom-Json -AsHashtable
-    } catch {
-        $sessions = @{}
-    }
-}
-
-$sessions["pid:$PID"] = $hwnd
-
-# Clean up old PIDs
-$toRemove = @()
-foreach ($key in $sessions.Keys) {
-    if ($key -like "pid:*") {
-        $oldPid = [int]($key -replace "pid:", "")
-        if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-            $toRemove += $key
+    if (Test-Path $sessionsFile) {
+        try {
+            $sessions = Get-Content $sessionsFile -Raw | ConvertFrom-Json -AsHashtable
+        } catch {
+            $sessions = @{}
         }
     }
-}
-foreach ($key in $toRemove) { $sessions.Remove($key) }
 
-$sessions | ConvertTo-Json | Set-Content $sessionsFile -Force
+    # Store by current working directory (primary key for notify.js lookup)
+    $sessions[$cwd] = $hwnd
+
+    # Also store by PID as backup
+    $sessions["pid:$PID"] = $hwnd
+
+    # Clean up old PIDs
+    $toRemove = @()
+    foreach ($key in $sessions.Keys) {
+        if ($key -like "pid:*") {
+            $oldPid = [int]($key -replace "pid:", "")
+            if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
+                $toRemove += $key
+            }
+        }
+    }
+    foreach ($key in $toRemove) { $sessions.Remove($key) }
+
+    $sessions | ConvertTo-Json | Set-Content $sessionsFile -Force
+
+    return $hwnd
+}
+
+function Start-Claude {
+    <#
+    .SYNOPSIS
+    Registers the current terminal window and launches Claude Code.
+    This ensures notifications will flash the correct window.
+
+    .EXAMPLE
+    Start-Claude
+    Start-Claude -ArgumentList "--help"
+    #>
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$ArgumentList
+    )
+
+    # Register this window/cwd before launching claude
+    $null = Register-ClaudeSession
+
+    # Launch claude with any provided arguments
+    if ($ArgumentList) {
+        & claude @ArgumentList
+    } else {
+        & claude
+    }
+}
+
+# Create alias for convenience
+Set-Alias -Name c -Value Start-Claude -Scope Global
+
+# Auto-register on profile load (captures the window when terminal opens)
+$null = Register-ClaudeSession
