@@ -112,9 +112,10 @@ process.stdin.on('end', () => {
  * Find the Windows Terminal window for this session.
  *
  * Strategy:
- * 1. Check if we have a registered HWND for this working directory
- * 2. If not, try to match by window title containing the directory name
- * 3. Fallback to first WT window
+ * 1. Check sessions file for HWND registered to this working directory (most reliable)
+ * 2. Check CLAUDE_WT_HWND environment variable (fallback)
+ * 3. Search for WT window by title matching directory name
+ * 4. Auto-register discovered HWND for future lookups
  *
  * Note: Due to WT's architecture, shells are NOT children of WindowsTerminal.exe,
  * so we can't use process tree walking. Session registration is the most reliable.
@@ -128,13 +129,7 @@ function lookupWindowHandle(cwd) {
     const dirName = cwd ? path.basename(cwd) : '';
     const sessionsFile = path.join(os.homedir(), '.claude-wt-sessions.json');
 
-    // Strategy 1: Check CLAUDE_WT_HWND environment variable (fastest - inherited from shell)
-    if (process.env.CLAUDE_WT_HWND) {
-      debug(`Found HWND from env: ${process.env.CLAUDE_WT_HWND}`);
-      return parseInt(process.env.CLAUDE_WT_HWND);
-    }
-
-    // Strategy 2: Check registered sessions by cwd
+    // Strategy 1: Check registered sessions by cwd (most reliable for multiple terminals)
     if (fs.existsSync(sessionsFile)) {
       try {
         const sessions = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
@@ -147,8 +142,14 @@ function lookupWindowHandle(cwd) {
         }
         debug(`No match for cwd "${cwd}"`);
       } catch (e) {
-        debug(`Strategy 2 failed: ${e.message}`);
+        debug(`Strategy 1 failed: ${e.message}`);
       }
+    }
+
+    // Strategy 2: Check CLAUDE_WT_HWND environment variable (fallback)
+    if (process.env.CLAUDE_WT_HWND) {
+      debug(`Found HWND from env: ${process.env.CLAUDE_WT_HWND}`);
+      return parseInt(process.env.CLAUDE_WT_HWND);
     }
 
     debug('Falling back to Strategy 3 (title match via script)');
