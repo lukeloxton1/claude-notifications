@@ -1,5 +1,5 @@
 # Claude Code notification with click-to-focus
-# Reads message from notify-data.json in plugin root
+# Reads message and HWND from notify-data.json, embeds HWND in protocol URL
 
 try {
     Import-Module BurntToast -ErrorAction Stop
@@ -10,10 +10,12 @@ try {
     $data = Get-Content $dataFile -Raw | ConvertFrom-Json
     $Message = $data.message
     $Title = "Claude Code"
+    $hwnd = $data.wtWindowHandle
 
-    # Create button that triggers focus protocol
-    $button = New-BTButton -Content "Show me" -Arguments "claude-focus://focus"
-    New-BurntToastNotification -Text $Title, $Message -Button $button -UniqueIdentifier "claude-code"
+    # Create button with HWND embedded in protocol URL (avoids race condition with shared file)
+    $focusUrl = if ($hwnd) { "claude-focus://focus/$hwnd" } else { "claude-focus://focus" }
+    $button = New-BTButton -Content "Show me" -Arguments $focusUrl
+    New-BurntToastNotification -Text $Title, $Message -Button $button -UniqueIdentifier "claude-code-$hwnd"
 }
 catch {
     # Fallback notification without button

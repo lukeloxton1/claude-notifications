@@ -1,5 +1,6 @@
-# Flash the Windows Terminal window using stored handle from notify-data.json
-# The handle was captured at notification time when the correct window was active
+# Flash the Windows Terminal window
+# HWND can be passed via protocol URL (claude-focus://focus/HWND) or read from notify-data.json
+param([string]$Url)
 
 Add-Type @"
 using System;
@@ -67,7 +68,13 @@ $dataFile = Join-Path $pluginDir "notify-data.json"
 
 $hwnd = [IntPtr]::Zero
 
-if (Test-Path $dataFile) {
+# Strategy 1: Parse HWND from protocol URL (e.g., claude-focus://focus/18615308)
+if ($Url -match 'claude-focus://focus/(\d+)') {
+    $hwnd = [IntPtr]::new([long]$Matches[1])
+}
+
+# Strategy 2: Fall back to reading from data file
+if ($hwnd -eq [IntPtr]::Zero -and (Test-Path $dataFile)) {
     try {
         $data = Get-Content $dataFile -Raw | ConvertFrom-Json
         if ($data.wtWindowHandle) {
