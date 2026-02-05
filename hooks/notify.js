@@ -16,7 +16,7 @@ const PLUGIN_DIR = path.dirname(__dirname);
 let data = '';
 process.stdin.on('data', chunk => data += chunk);
 process.stdin.on('end', () => {
-  const msgDebugFile = path.join(os.homedir(), 'claude-notify-msg-debug.log');
+  const msgDebugFile = path.join(PLUGIN_DIR, 'logs', 'notify-debug.log');
   const msgDebug = (msg) => fs.appendFileSync(msgDebugFile, `${new Date().toISOString()} ${msg}\n`);
 
   try {
@@ -37,14 +37,19 @@ process.stdin.on('end', () => {
       message = json.message;
     } else if (json.transcript_path && fs.existsSync(json.transcript_path)) {
       msgDebug(`Reading transcript from: ${json.transcript_path}`);
+
+      // Simple approach: Wait for transcript to be written, then extract tag
+      // The Stop hook fires before transcript is fully written, so we need a delay
+      msgDebug('Waiting 300ms for transcript to be written...');
+      const start = Date.now();
+      while (Date.now() - start < 300) { /* wait */ }
+
       const transcript = fs.readFileSync(json.transcript_path, 'utf8');
       const lines = transcript.trim().split('\n');
-      msgDebug(`Transcript has ${lines.length} lines`);
+      msgDebug(`Transcript has ${lines.length} lines after delay`);
 
       // Search backwards through assistant entries for notify tag
-      // Don't break early - transcript has multiple entries per turn (thinking, text, tool_use)
-      let foundTag = false;
-      for (let i = lines.length - 1; i >= 0 && !foundTag; i--) {
+      for (let i = lines.length - 1; i >= 0; i--) {
         try {
           const entry = JSON.parse(lines[i]);
           if (entry.type === 'assistant' && entry.message?.content) {
@@ -53,21 +58,17 @@ process.stdin.on('end', () => {
             for (const c of contentArr) {
               const text = c.text || '';
               if (text.length > 0) {
-                msgDebug(`Found text content, length=${text.length}`);
                 const match = text.match(/<!--\s*notify:\s*(.+?)\s*-->/i);
                 if (match) {
-                  msgDebug(`Found notify tag: ${match[1]}`);
                   message = match[1].trim();
-                  foundTag = true;
+                  msgDebug(`Found notify tag: ${message}`);
                   break;
                 }
               }
             }
+            if (message !== 'Response complete') break; // Found a tag, stop searching
           }
         } catch (e) { /* skip malformed line */ }
-      }
-      if (!foundTag) {
-        msgDebug(`No notify tag found in any assistant message`);
       }
     } else {
       msgDebug(`transcript_path not available or file doesn't exist`);
@@ -80,10 +81,10 @@ process.stdin.on('end', () => {
     const cwd = json.cwd || process.cwd();
     const sessionId = json.session_id || 'default';
 
-    // On Windows: look up HWND from sessions file
+    // On Windows: look up HWND from session registry
     let wtWindowHandle = null;
     if (os.platform() === 'win32') {
-      wtWindowHandle = lookupWindowHandle(cwd);
+      wtWindowHandle = lookupWindowHandle(cwd, sessionId);
     }
 
     // Use session-specific data file to avoid race conditions between multiple sessions
@@ -109,91 +110,53 @@ process.stdin.on('end', () => {
 });
 
 /**
- * Find the Windows Terminal window for this session.
+ * Find the Windows Terminal window for this session using session-based registry.
  *
- * Strategy:
- * 1. Check sessions file for HWND registered to this working directory (most reliable)
- * 2. Check CLAUDE_WT_HWND environment variable (fallback)
- * 3. Search for WT window by title matching directory name
- * 4. Auto-register discovered HWND for future lookups
+ * This is a simplified lookup that relies on the Start hook (register-window.js)
+ * to have already captured the session_id -> HWND mapping.
  *
- * Note: Due to WT's architecture, shells are NOT children of WindowsTerminal.exe,
- * so we can't use process tree walking. Session registration is the most reliable.
+ * @param {string} cwd - Current working directory (kept for compatibility, not used)
+ * @param {string} sessionId - Claude session ID (primary lookup key)
+ * @returns {number|null} - Window handle (HWND) or null if not found
  */
-function lookupWindowHandle(cwd) {
-  const debugFile = path.join(os.homedir(), 'claude-notify-debug.log');
+function lookupWindowHandle(cwd, sessionId) {
+  const debugFile = path.join(PLUGIN_DIR, 'logs', 'lookup-debug.log');
   const debug = (msg) => fs.appendFileSync(debugFile, `${new Date().toISOString()} ${msg}\n`);
 
   try {
-    debug(`lookupWindowHandle called with cwd: ${cwd}`);
-    const dirName = cwd ? path.basename(cwd) : '';
-    const sessionsFile = path.join(os.homedir(), '.claude-wt-sessions.json');
+    debug(`lookupWindowHandle called with sessionId: ${sessionId}, cwd: ${cwd}`);
 
-    // Strategy 1: Check registered sessions by cwd (most reliable for multiple terminals)
-    if (fs.existsSync(sessionsFile)) {
-      try {
-        const sessions = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
-        debug(`Sessions loaded, keys: ${Object.keys(sessions).join(', ')}`);
+    // Read session registry
+    const registryFile = path.join(PLUGIN_DIR, '.session-registry.json');
 
-        // Lookup by cwd
-        if (cwd && sessions[cwd]) {
-          debug(`Found HWND by cwd: ${sessions[cwd]}`);
-          return parseInt(sessions[cwd]);
-        }
-        debug(`No match for cwd "${cwd}"`);
-      } catch (e) {
-        debug(`Strategy 1 failed: ${e.message}`);
-      }
+    if (!fs.existsSync(registryFile)) {
+      debug('ERROR: Session registry file does not exist. Was the Start hook registered?');
+      return null;
     }
 
-    // Strategy 2: Check CLAUDE_WT_HWND environment variable (fallback)
-    if (process.env.CLAUDE_WT_HWND) {
-      debug(`Found HWND from env: ${process.env.CLAUDE_WT_HWND}`);
-      return parseInt(process.env.CLAUDE_WT_HWND);
-    }
+    const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    debug(`Registry loaded with ${Object.keys(registry).length} sessions`);
 
-    debug('Falling back to Strategy 3 (title match via script)');
-    // Strategy 3: Match by title or fallback to first WT window using external script
-    const findScript = path.join(PLUGIN_DIR, 'scripts', 'windows', 'find-wt-window.ps1');
-    if (fs.existsSync(findScript)) {
-      const escapedDir = dirName.replace(/'/g, "''");
-      const escapedPath = cwd ? cwd.replace(/'/g, "''") : '';
-      const result = execSync(`powershell -ExecutionPolicy Bypass -NoProfile -File "${findScript}" -DirName '${escapedDir}' -FullPath '${escapedPath}'`, {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 8000
-      }).trim();
+    // Look up by session ID
+    if (registry[sessionId]) {
+      const entry = registry[sessionId];
+      debug(`Found session: hwnd=${entry.hwnd}, source=${entry.source}, firstSeen=${entry.firstSeen}`);
 
-      if (result && !isNaN(parseInt(result))) {
-        const hwnd = parseInt(result);
-        debug(`Strategy 3 returned: ${hwnd}`);
+      // Update lastSeen timestamp
+      entry.lastSeen = new Date().toISOString();
+      fs.writeFileSync(registryFile, JSON.stringify(registry, null, 2));
+      debug('Updated lastSeen timestamp');
 
-        // Auto-register this HWND so we don't have to search next time
-        if (cwd) {
-          try {
-            let sessions = {};
-            if (fs.existsSync(sessionsFile)) {
-              sessions = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
-            }
-            sessions[cwd] = hwnd;
-            fs.writeFileSync(sessionsFile, JSON.stringify(sessions, null, 2));
-            debug(`Auto-registered HWND ${hwnd} for ${cwd}`);
-          } catch (e) {
-            debug(`Failed to auto-register: ${e.message}`);
-          }
-        }
-
-        return hwnd;
-      }
-      debug('Strategy 3 returned nothing');
+      return entry.hwnd;
     } else {
-      debug(`Script not found: ${findScript}`);
+      debug(`ERROR: Session ${sessionId} not found in registry. Available sessions: ${Object.keys(registry).join(', ')}`);
+      return null;
     }
+
   } catch (e) {
-    debug(`lookupWindowHandle error: ${e.message}`);
+    debug(`lookupWindowHandle error: ${e.message}\n${e.stack}`);
+    return null;
   }
-  debug('Returning null');
-  return null;
 }
 
 function notifyWindows(sessionId) {

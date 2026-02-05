@@ -1,5 +1,10 @@
 # Runtime data files
 notify-data.json
+notify-data-*.json
+.session-registry.json
+
+# Debug logs
+logs/
 
 # OS files
 .DS_Store

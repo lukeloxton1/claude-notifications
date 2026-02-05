@@ -11,11 +11,14 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// Plugin directory (assume this script is in PLUGIN_DIR/hooks/)
+const PLUGIN_DIR = path.dirname(__dirname);
+
 // Read stdin (hook event data)
 let data = '';
 process.stdin.on('data', chunk => data += chunk);
 process.stdin.on('end', () => {
-  const debugFile = path.join(os.homedir(), 'claude-notify-register-debug.log');
+  const debugFile = path.join(PLUGIN_DIR, 'logs', 'register-debug.log');
   const debug = (msg) => fs.appendFileSync(debugFile, `${new Date().toISOString()} ${msg}\n`);
 
   try {
@@ -77,7 +80,7 @@ process.stdin.on('end', () => {
     }
 
     // Load existing registry
-    const registryFile = path.join(os.homedir(), '.claude-session-registry.json');
+    const registryFile = path.join(PLUGIN_DIR, '.session-registry.json');
     let registry = {};
 
     if (fs.existsSync(registryFile)) {
@@ -131,7 +134,7 @@ process.stdin.on('end', () => {
     }
 
   } catch (e) {
-    const debugFile = path.join(os.homedir(), 'claude-notify-register-debug.log');
+    const debugFile = path.join(PLUGIN_DIR, 'logs', 'register-debug.log');
     fs.appendFileSync(debugFile, `${new Date().toISOString()} ERROR: ${e.message}\n${e.stack}\n`);
   }
 });
