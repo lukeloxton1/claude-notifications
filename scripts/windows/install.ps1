@@ -96,15 +96,181 @@ try {
 
 Write-Host ""
 Write-Host "Installation complete!" -ForegroundColor Green
+
+# Step 4: Auto-configure Claude Code settings
 Write-Host ""
-Write-Host "To enable in Claude Code, add to your settings.json:" -ForegroundColor Cyan
+Write-Host "Step 4: Configuring Claude Code..." -ForegroundColor White
+
+$settingsFile = "$HOME\.claude\settings.json"
+$settingsConfigured = $false
+
+if (Test-Path $settingsFile) {
+    try {
+        $settings = Get-Content $settingsFile -Raw | ConvertFrom-Json
+
+        # Check if hooks already exist
+        $hasSessionStart = $settings.hooks.SessionStart | Where-Object {
+            $_.hooks | Where-Object { $_.command -like "*register-window.js*" }
+        }
+        $hasStop = $settings.hooks.Stop | Where-Object {
+            $_.hooks | Where-Object { $_.command -like "*notify.js*" }
+        }
+
+        if ($hasSessionStart -and $hasStop) {
+            Write-Host "[OK] Hooks already configured in settings.json" -ForegroundColor Green
+            $settingsConfigured = $true
+        } else {
+            Write-Host "Adding hooks to settings.json..." -ForegroundColor Yellow
+
+            # Ensure hooks object exists
+            if (-not $settings.hooks) {
+                $settings | Add-Member -MemberType NoteProperty -Name "hooks" -Value @{} -Force
+            }
+
+            # Add SessionStart hook if missing
+            if (-not $hasSessionStart) {
+                if (-not $settings.hooks.SessionStart) {
+                    $settings.hooks | Add-Member -MemberType NoteProperty -Name "SessionStart" -Value @() -Force
+                }
+                $settings.hooks.SessionStart += @{
+                    hooks = @(
+                        @{
+                            type = "command"
+                            command = "node $pluginDir\hooks\register-window.js"
+                        }
+                    )
+                }
+            }
+
+            # Add Stop hook if missing
+            if (-not $hasStop) {
+                if (-not $settings.hooks.Stop) {
+                    $settings.hooks | Add-Member -MemberType NoteProperty -Name "Stop" -Value @() -Force
+                }
+                $settings.hooks.Stop += @{
+                    hooks = @(
+                        @{
+                            type = "command"
+                            command = "node $pluginDir\hooks\notify.js"
+                        }
+                    )
+                }
+            }
+
+            # Save updated settings
+            $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
+            Write-Host "[OK] Hooks added to settings.json" -ForegroundColor Green
+            $settingsConfigured = $true
+        }
+    } catch {
+        Write-Host "[WARNING] Could not auto-configure settings.json: $_" -ForegroundColor Yellow
+        Write-Host "You'll need to add hooks manually - see README.md" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[WARNING] settings.json not found at $settingsFile" -ForegroundColor Yellow
+    Write-Host "Run Claude Code at least once to create it, then re-run this installer" -ForegroundColor Yellow
+}
+
+# Step 5: Configure PowerShell profile
 Write-Host ""
-Write-Host '  "hooks": {' -ForegroundColor Gray
-Write-Host '    "Stop": [{' -ForegroundColor Gray
-Write-Host '      "hooks": [{' -ForegroundColor Gray
-Write-Host '        "type": "command",' -ForegroundColor Gray
-Write-Host "        `"command`": `"node `"$pluginDir\hooks\notify.js`"`"" -ForegroundColor Gray
-Write-Host '      }]' -ForegroundColor Gray
-Write-Host '    }]' -ForegroundColor Gray
-Write-Host '  }' -ForegroundColor Gray
+Write-Host "Step 5: Configuring PowerShell profile..." -ForegroundColor White
+
+$profileConfigured = $false
+if (Test-Path $PROFILE) {
+    $profileContent = Get-Content $PROFILE -Raw
+    if ($profileContent -like "*Register-Session.ps1*") {
+        Write-Host "[OK] PowerShell profile already configured" -ForegroundColor Green
+        $profileConfigured = $true
+    } else {
+        Write-Host "Adding session registration to profile..." -ForegroundColor Yellow
+        Add-Content $PROFILE "`n# Claude notifications - register window on startup`n. `"`$HOME\claude-notify\scripts\windows\Register-Session.ps1`"`n"
+        Write-Host "[OK] PowerShell profile updated" -ForegroundColor Green
+        $profileConfigured = $true
+    }
+} else {
+    Write-Host "Creating PowerShell profile..." -ForegroundColor Yellow
+    $profileDir = Split-Path $PROFILE
+    if (-not (Test-Path $profileDir)) {
+        New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+    }
+    Set-Content $PROFILE "# Claude notifications - register window on startup`n. `"`$HOME\claude-notify\scripts\windows\Register-Session.ps1`"`n"
+    Write-Host "[OK] PowerShell profile created" -ForegroundColor Green
+    $profileConfigured = $true
+}
+
+# Step 6: Configure CLAUDE.md for notification tags
+Write-Host ""
+Write-Host "Step 6: Configuring CLAUDE.md for custom notification messages..." -ForegroundColor White
+
+$claudeMdFile = "$HOME\.claude\CLAUDE.md"
+$claudeMdConfigured = $false
+
+$notificationInstructions = @"
+
+## Notification Summary
+
+End EVERY response with a blank line, then: ``<!-- notify: [under 50 chars] -->``
+- MUST have a blank line before the tag (otherwise parser may miss it)
+- Keep under 50 characters
+- Describes what you did
+
+Examples:
+- ``<!-- notify: Created user service -->``
+- ``<!-- notify: Fixed login bug -->``
+- ``<!-- notify: Tests passing -->``
+
+"@
+
+if (Test-Path $claudeMdFile) {
+    $claudeMdContent = Get-Content $claudeMdFile -Raw
+    if ($claudeMdContent -like "*<!-- notify:*") {
+        Write-Host "[OK] CLAUDE.md already has notification instructions" -ForegroundColor Green
+        $claudeMdConfigured = $true
+    } else {
+        $response = Read-Host "Add notification tag instructions to CLAUDE.md? (Y/n)"
+        if ($response -eq "" -or $response -eq "Y" -or $response -eq "y") {
+            Add-Content $claudeMdFile $notificationInstructions
+            Write-Host "[OK] Notification instructions added to CLAUDE.md" -ForegroundColor Green
+            $claudeMdConfigured = $true
+        } else {
+            Write-Host "[SKIP] You can add them manually later - see README.md" -ForegroundColor Yellow
+        }
+    }
+} else {
+    $response = Read-Host "CLAUDE.md not found. Create it with notification instructions? (Y/n)"
+    if ($response -eq "" -or $response -eq "Y" -or $response -eq "y") {
+        Set-Content $claudeMdFile "# Global Claude Instructions$notificationInstructions"
+        Write-Host "[OK] CLAUDE.md created with notification instructions" -ForegroundColor Green
+        $claudeMdConfigured = $true
+    } else {
+        Write-Host "[SKIP] You can create it manually later - see README.md" -ForegroundColor Yellow
+    }
+}
+
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Setup Complete!" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+if ($settingsConfigured -and $profileConfigured -and $claudeMdConfigured) {
+    Write-Host "All components configured successfully!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Next steps:" -ForegroundColor White
+    Write-Host "1. Restart your PowerShell session (or run: . `$PROFILE)" -ForegroundColor Gray
+    Write-Host "2. Launch Claude with: Start-Claude  (or use alias: c)" -ForegroundColor Gray
+    Write-Host "3. Notifications will flash the correct window automatically!" -ForegroundColor Gray
+} else {
+    Write-Host "Some components need manual configuration:" -ForegroundColor Yellow
+    if (-not $settingsConfigured) {
+        Write-Host "  - Add hooks to ~/.claude/settings.json (see README.md)" -ForegroundColor Yellow
+    }
+    if (-not $profileConfigured) {
+        Write-Host "  - Add Register-Session to PowerShell profile (see README.md)" -ForegroundColor Yellow
+    }
+    if (-not $claudeMdConfigured) {
+        Write-Host "  - Add notification tags to CLAUDE.md (see README.md)" -ForegroundColor Yellow
+    }
+}
+
 Write-Host ""
