@@ -3,8 +3,8 @@ notify-data.json
 notify-data-*.json
 .session-registry.json
 
-# Debug logs
-logs/
+# Debug logs (keep directory, ignore log files)
+logs/*.log
 
 # OS files
 .DS_Store
