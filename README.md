@@ -8,14 +8,14 @@ When Claude finishes responding, you get a desktop notification. Click it to jum
 
 **Windows:**
 ```powershell
-git clone https://github.com/lukeloxton1/claude-notify.git $HOME\claude-notify
+git clone https://github.com/lukeloxton1/claude-notifications.git $HOME\claude-notify
 cd $HOME\claude-notify
 .\scripts\windows\install.ps1
 ```
 
 **macOS:**
 ```bash
-git clone https://github.com/lukeloxton1/claude-notify.git ~/claude-notify
+git clone https://github.com/lukeloxton1/claude-notifications.git ~/claude-notify
 cd ~/claude-notify
 ./scripts/macos/install.sh
 ```
@@ -89,6 +89,16 @@ Add the hook to your Claude Code settings (`~/.claude/settings.json`):
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node C:/Users/YOUR_USERNAME/claude-notify/hooks/register-window.js"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -102,6 +112,8 @@ Add the hook to your Claude Code settings (`~/.claude/settings.json`):
   }
 }
 ```
+
+**Important:** The `SessionStart` hook registers your session's window handle for correct multi-session support. Without it, notifications may flash the wrong window if you have multiple Claude sessions running.
 
 **macOS/Linux:**
 ```json
@@ -125,18 +137,40 @@ Replace `YOUR_USERNAME` or adjust the path to match where you cloned the reposit
 
 ## Custom Notification Messages
 
-Add a comment at the end of your CLAUDE.md or system prompt instructions:
+By default, notifications show "Response complete". To get custom messages that describe what Claude just did, add notification tag instructions to your CLAUDE.md.
+
+### Option 1: Add to your global CLAUDE.md
+
+Add this to your `~/.claude/CLAUDE.md`:
 
 ```markdown
-End EVERY response with: `<!-- notify: [brief description] -->`
+## Notification Summary
+
+End EVERY response with a blank line, then: `<!-- notify: [under 50 chars] -->`
+- MUST have a blank line before the tag (otherwise parser may miss it)
+- Keep under 50 characters
+- Describes what you did
+
+Examples:
+- `<!-- notify: Created user service -->`
+- `<!-- notify: Fixed login bug -->`
+- `<!-- notify: Tests passing -->`
 ```
 
-Claude will then include custom messages like:
-```
-<!-- notify: Fixed the login bug -->
+### Option 2: Add to project-specific instructions
+
+Add the same instructions to your project's `.claude/CLAUDE.md` file.
+
+### Example notification tags
+
+```markdown
+<!-- notify: Implemented authentication -->
+<!-- notify: Refactored database layer -->
+<!-- notify: All tests passing -->
+<!-- notify: PR created #123 -->
 ```
 
-The notification will show "Fixed the login bug" instead of "Response complete".
+The notification will show your custom message instead of "Response complete", making it easy to see what Claude accomplished without switching windows.
 
 ## How It Works
 
@@ -250,4 +284,4 @@ Then remove the hook from your Claude Code settings.
 
 ## License
 
-MIT
+This is free and unencumbered software released into the public domain. See [LICENSE](LICENSE) for details.
